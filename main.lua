@@ -62,12 +62,12 @@ local C = {
 -- STATE
 -- ====================================================================
 local state = {
-    autoGreen=false, infiniteStamina=false, speedBoost=false,
-    manualSpeed=false, velocityBoost=false, antiLag=false,
-    autoSprint=false, customFeedback=false, dribbleMacro=false,
-    antiOOB=false, autoBlock=false, animSpeedBoost=false,
-    autoGuard=false, antiAnkleBreak=false, antiStun=false,
-    antiContest=false, blowByBoost=false,
+    autoGreen=false, infiniteStamina=false, speedBoost=false, 
+    manualSpeed=false, velocityBoost=false, antiLag=false, dribbleSpeedBoost = false,
+    autoSprint=false, customFeedback=false, dribbleMacro=false, instantSpin = false,
+    antiOOB=false, autoBlock=false, animSpeedBoost=false, hipHeightBoost = false,
+    autoGuard=false, antiAnkleBreak=false, antiStun=false, hipHeightAmount = 0.3,
+    antiContest=false, blowByBoost=false, autoCrossover = false,
 }
 local vfxHue        = 210
 local manualSpeedVal = 16
@@ -76,6 +76,58 @@ local blockFOV      = 90
 local blockDelayMs  = 150
 
 -- ====================================================================
+-- ====================================================================
+-- SETTINGS SAVE/LOAD (uses writefile/readfile if available)
+-- ====================================================================
+local SETTINGS_FILE = "SiftWinSettings.json"
+
+local function saveSettings()
+if not container then return end
+    local settings = {
+        position = {X = container and container.Position.X.Offset or 0, Y = container and container.Position.Y.Offset or 0},
+        toggles = {},
+        sliders = {
+            manualSpeedVal = manualSpeedVal,
+            blockRange = blockRange,
+            blockFOV = blockFOV,
+            blockDelayMs = blockDelayMs,
+            GUARD_DISTANCE = GUARD_DISTANCE,
+            vfxHue = vfxHue,
+        }
+    }
+    for k, v in pairs(state) do
+        settings.toggles[k] = v
+    end
+    local success, encoded = pcall(HttpService.JSONEncode, HttpService, settings)
+    if success and encoded then
+        pcall(writefile, SETTINGS_FILE, encoded)
+    end
+end
+
+local function loadSettings()
+    local success, data = pcall(readfile, SETTINGS_FILE)
+    if not success or not data then return end
+    local decoded = HttpService:JSONDecode(data)
+    if not decoded then return end
+    -- Apply toggles
+    if decoded.toggles then
+        for k, v in pairs(decoded.toggles) do
+            if state[k] ~= nil then state[k] = v end
+        end
+    end
+    -- Apply sliders
+    if decoded.sliders then
+        manualSpeedVal = decoded.sliders.manualSpeedVal or manualSpeedVal
+        blockRange = decoded.sliders.blockRange or blockRange
+        blockFOV = decoded.sliders.blockFOV or blockFOV
+        blockDelayMs = decoded.sliders.blockDelayMs or blockDelayMs
+        GUARD_DISTANCE = decoded.sliders.GUARD_DISTANCE or GUARD_DISTANCE
+        vfxHue = decoded.sliders.vfxHue or vfxHue
+    end
+    -- UI position will be applied after container is created
+    return decoded.position
+end
+
 -- HSV
 -- ====================================================================
 local function hsvToRgb(h,s,v)
@@ -97,7 +149,7 @@ end
 -- AUTO GREEN
 -- ====================================================================
 local TIMINGS,scores,shotLog={},{},{}
-local AG_MIN,AG_MAX,AG_STEP=0.4173,0.4313,0.001
+local AG_MIN,AG_MAX,AG_STEP=0.4111,0.4144,0.001
 do local t=AG_MIN
     while t<=AG_MAX+0.00001 do
         table.insert(TIMINGS,math.floor(t*10000+0.5)/10000); t=t+AG_STEP
@@ -187,11 +239,59 @@ local function executeShot()
     task.wait(0.22); agBusy=false
 end
 
+-- List of random PNG asset IDs (replace with your own)
+local RANDOM_PNG_IDS = {
+    "rbxassetid://85822546904397",  -- example star
+    "rbxassetid://6031094597",  -- example burst
+    "rbxassetid://10147220411", -- example glow
+    "rbxassetid://9125469473",  -- example impact
+}
+-- Function to show a random PNG effect on screen
+local function showRandomPNGEffect()
+    local pngUrl = RANDOM_PNG_IDS[math.random(1, #RANDOM_PNG_IDS)]
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "CustomGreenVFX"
+    gui.ResetOnSpawn = false
+    gui.Parent = player:WaitForChild("PlayerGui")
+    
+    local img = Instance.new("ImageLabel")
+    img.Size = UDim2.new(0, 120, 0, 120)
+    img.Position = UDim2.new(0.5, -60, 0.5, -60)
+    img.AnchorPoint = Vector2.new(0.5, 0.5)
+    img.BackgroundTransparency = 1
+    img.Image = pngUrl
+    img.ImageTransparency = 0
+    img.ZIndex = 20
+    img.Parent = gui
+    
+    -- Animate: grow and fade out
+    local startSize = UDim2.new(0, 40, 0, 40)
+    local endSize = UDim2.new(0, 200, 0, 200)
+    img.Size = startSize
+    
+    local grow = TweenService:Create(img, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = endSize})
+    local fade = TweenService:Create(img, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {ImageTransparency = 1})
+    
+    grow:Play()
+    grow.Completed:Connect(function()
+        fade:Play()
+        fade.Completed:Connect(function()
+            gui:Destroy()
+        end)
+    end)
+    
+    -- Optional: slight rotation
+    local rotate = TweenService:Create(img, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Rotation = 30})
+    rotate:Play()
+end
+
+
 ContextActionService:BindActionAtPriority("SiftWinShoot",function(_,st,_)
     if st==Enum.UserInputState.Begin then task.spawn(executeShot) end
     return state.autoGreen and Enum.ContextActionResult.Sink or Enum.ContextActionResult.Pass
 end,false,2000,Enum.KeyCode.E,Enum.KeyCode.ButtonB,Enum.KeyCode.ButtonX)
 
+-- ====================================================================
 -- ====================================================================
 -- VFX + GLOW
 -- ====================================================================
@@ -216,6 +316,7 @@ local function recolour(inst)
         end
     end
 end
+
 local function syncGlow()
     for _,obj in ipairs(character:GetDescendants()) do
         if obj.Name=="Glow_Outline" and obj:IsA("ParticleEmitter") then
@@ -225,6 +326,7 @@ local function syncGlow()
         end
     end
 end
+
 local function applyVfx()
     task.spawn(function()
         local a=ReplicatedStorage:FindFirstChild("Assets")
@@ -232,17 +334,136 @@ local function applyVfx()
         recolour(character); syncGlow()
     end)
 end
+
+-- ========== NEW: Attach PNG to ball / hoop / player ==========
+-- Find the basketball in the workspace
+local function findBall()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.Name:lower():find("ball") then
+            -- Ignore balls that are welded to a player (being held)
+            if not obj:FindFirstChild("WeldConstraint") then
+                return obj
+            end
+        end
+    end
+    return nil
+end
+
+-- Find the hoop (rim)
+local function findHoop()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and (obj.Name:lower():find("rim") or obj.Name:lower():find("hoop")) then
+            return obj
+        end
+    end
+    return nil
+end
+
+-- Attach a PNG image to a part (BillboardGui)
+local function attachPNGToPart(part, pngUrl, duration)
+    duration = duration or 0.6
+    if not part or not part.Parent then return end
+    
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(0, 100, 0, 100)
+    billboard.StudsOffset = Vector3.new(0, 1.5, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = part
+    
+    local img = Instance.new("ImageLabel")
+    img.Size = UDim2.new(1, 0, 1, 0)
+    img.BackgroundTransparency = 1
+    img.Image = pngUrl
+    img.ImageTransparency = 0
+    img.Parent = billboard
+    
+    -- Animate: grow + rotate + fade
+    local startSize = UDim2.new(0.3, 0, 0.3, 0)
+    local endSize = UDim2.new(1.2, 0, 1.2, 0)
+    img.Size = startSize
+    
+    local grow = TweenService:Create(img, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = endSize})
+    local fade = TweenService:Create(img, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {ImageTransparency = 1})
+    local rotate = TweenService:Create(img, TweenInfo.new(0.3, Enum.EasingStyle.Linear), {Rotation = 180})
+    
+    grow:Play()
+    rotate:Play()
+    grow.Completed:Connect(function()
+        fade:Play()
+        fade.Completed:Connect(function()
+            billboard:Destroy()
+        end)
+    end)
+    
+    -- Auto-destroy after duration (safety)
+    task.wait(duration)
+    if billboard and billboard.Parent then
+        billboard:Destroy()
+    end
+end
+-- ==============================================================
+
 task.spawn(function()
     task.wait(2); applyVfx()
-    local a=ReplicatedStorage:FindFirstChild("Assets")
-    if a then local vf=a:FindFirstChild("VFX")
-        if vf then vf.DescendantAdded:Connect(function(d) task.defer(function() recolour(d);syncGlow() end) end) end
+    local a = ReplicatedStorage:FindFirstChild("Assets")
+    if a then
+        local vf = a:FindFirstChild("VFX")
+        if vf then
+            vf.DescendantAdded:Connect(function(d)
+                task.defer(function() recolour(d); syncGlow() end)
+            end)
+        end
     end
-    local ge=Remotes:FindFirstChild("GreenVfx")
-    if not ge then for _,v in ipairs(Remotes:GetDescendants()) do
-        if v.Name:lower():find("green") and v:IsA("RemoteEvent") then ge=v;break end end end
-    if ge then ge.OnClientEvent:Connect(function() task.wait(0.05);recolour(character);syncGlow() end) end
-    while true do task.wait(3);syncGlow() end
+    
+    -- GREEN VFX: attach PNG to ball/hoop/player instead of screen popup
+    local ge = Remotes:FindFirstChild("GreenVfx")
+    if not ge then
+        for _, v in ipairs(Remotes:GetDescendants()) do
+            if v.Name:lower():find("green") and v:IsA("RemoteEvent") then
+                ge = v
+                break
+            end
+        end
+    end
+    
+    if ge then
+        ge.OnClientEvent:Connect(function()
+            task.wait(0.05)
+            
+            -- Pick a random PNG from your existing list
+            local pngUrl = RANDOM_PNG_IDS[math.random(1, #RANDOM_PNG_IDS)]
+            
+            -- Try to attach to the ball first (made basket)
+            local ball = findBall()
+            if ball then
+                attachPNGToPart(ball, pngUrl, 0.6)
+            else
+                -- No ball found → attach to hoop (swish)
+                local hoop = findHoop()
+                if hoop then
+                    attachPNGToPart(hoop, pngUrl, 0.6)
+                else
+                    -- Fallback: attach to player's head (personal green)
+                    local head = character:FindFirstChild("Head")
+                    if head then
+                        attachPNGToPart(head, pngUrl, 0.6)
+                    else
+                        -- Ultimate fallback: screen GUI (your old method)
+                        showRandomPNGEffect()
+                    end
+                end
+            end
+            
+            -- Keep the character glow (optional)
+            syncGlow()
+        end)
+    end
+    
+    -- Keep the periodic glow refresh
+    while true do
+        task.wait(3)
+        syncGlow()
+    end
 end)
 
 -- ====================================================================
@@ -252,7 +473,8 @@ local staminaConn,sprintConn,sbConn1,sbConn2,sbAutoConn=nil,nil,nil,nil,nil
 local manualSpeedConn,velConn,feedbackConn,autoBlockConn,animSpeedConn=nil,nil,nil,nil,nil
 local guardConn,ankleConn,antiStunConn,blowByConn,antiContestConn=nil,nil,nil,nil,nil
 local oobConn1,oobConn2,lastSafePos,oobPartRefs={},{},nil,{}
-local macroActive,sbLastTap=false,0
+local macroActive,sbLastTap=false,0 
+local blockCooldown = 0
 local lagOriginals={}
 
 local function enableInfiniteStamina()
@@ -295,7 +517,78 @@ local function disableSpeedBoost()
     if sbConn2 then sbConn2:Disconnect();sbConn2=nil end
     if sbAutoConn then sbAutoConn:Disconnect();sbAutoConn=nil end
 end
+local autoCrossoverConn = nil
+local lastCrossoverTime = 0
+local function enableAutoCrossover()
+    if autoCrossoverConn then autoCrossoverConn:Disconnect() end
+    autoCrossoverConn = RunService.Heartbeat:Connect(function()
+        if not state.autoCrossover then return end
+        if character:GetAttribute("Action") ~= "Dribbling" then return end
+        if not character:GetAttribute("Sprinting") then return end
+        
+        -- Cooldown: random between 2 and 4 seconds
+        if tick() - lastCrossoverTime < (math.random(20, 40) / 10) then return end
+        
+        -- Avoid spamming if last dribble was already a crossover
+        local lastDrib = character:GetAttribute("LastDribbleName") or ""
+        if lastDrib:lower():find("crossover") then return end
+        
+        -- Find nearest opponent
+        local myPos = hrp.Position
+        local nearestDist = math.huge
+        for _, other in ipairs(Players:GetPlayers()) do
+            if other ~= player then
+                local char = other.Character
+                if char and char.Parent then
+                    local root = char:FindFirstChild("HumanoidRootPart")
+                    if root then
+                        local dist = (root.Position - myPos).Magnitude
+                        if dist < nearestDist then nearestDist = dist end
+                    end
+                end
+            end
+        end
+        
+        -- Only crossover if no defender within 12 studs (open space)
+        -- Or if moving away from the closest defender (optional)
+        if nearestDist > 12 then
+            lastCrossoverTime = tick()
+            Action:FireServer({Type = "Dribble", Keys = "CX"})
+        end
+    end)
+end
+local function disableAutoCrossover()
+    if autoCrossoverConn then
+        autoCrossoverConn:Disconnect()
+        autoCrossoverConn = nil
+    end
+end
 
+
+local dribSpeedBoostConn = nil
+local DRIBBLE_SPEED_OVERRIDE = 22
+local lastSpeedBoostTime = 0
+
+local instantSpinConn = nil
+local lastSpinTime = 0
+local function enableInstantSpin()
+    if instantSpinConn then instantSpinConn:Disconnect() end
+    instantSpinConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        if not state.instantSpin then return end
+        if input.KeyCode == Enum.KeyCode.Q then
+            if character:GetAttribute("Action") == "Dribbling" then
+                if tick() - lastSpinTime > 0.5 then
+                    lastSpinTime = tick()
+                    -- Try both spin keys
+                    pcall(function() Action:FireServer({Type = "Dribble", Keys = "CXZ"}) end)
+                    task.wait(0.05)
+                    pcall(function() Action:FireServer({Type = "Dribble", Keys = "ZXC"}) end)
+                end
+            end
+        end
+    end)
+end
 local function enableManualSpeed()
     manualSpeedConn=RunService.Heartbeat:Connect(function()
         if not state.manualSpeed then return end
@@ -407,16 +700,76 @@ local function disableAntiOOB()
 end
 
 local function enableAutoBlock()
-    autoBlockConn=RunService.Heartbeat:Connect(function()
-        if not state.autoBlock then return end; local myPos=hrp.Position; local myLook=hrp.CFrame.LookVector
-        for _,p in ipairs(Players:GetPlayers()) do if p~=player then local c=p.Character; if c then local ph=c:FindFirstChild("HumanoidRootPart"); if ph then
-            local diff=ph.Position-myPos; local dist=diff.Magnitude
-            if dist<=blockRange then local dot=myLook:Dot(diff.Unit); local angle=math.deg(math.acos(math.clamp(dot,-1,1)))
-                if angle<=blockFOV/2 and c:GetAttribute("Action")=="Shooting" then
-                    task.delay(blockDelayMs/1000,function() if state.autoBlock then Action:FireServer(unpack({{Type="Block"}})) end end) end end end end end end end)
+    if autoBlockConn then autoBlockConn:Disconnect() end
+    autoBlockConn = RunService.Heartbeat:Connect(function()
+        if not state.autoBlock then return end
+        
+        -- Cooldown check (uses blockDelayMs slider)
+        if tick() - blockCooldown < (blockDelayMs / 1000) then return end
+        
+        local myPos = hrp.Position
+        local myLook = hrp.CFrame.LookVector
+        
+        for _, other in ipairs(Players:GetPlayers()) do
+            if other ~= player then
+                local char = other.Character
+                if char and char.Parent then
+                    local action = char:GetAttribute("Action")
+                    -- Only block shooting or dunking opponents
+                    if action == "Shooting" or action == "Dunking" then
+                        local root = char:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            local diff = root.Position - myPos
+                            local dist = diff.Magnitude
+                            if dist <= blockRange then
+                                local dot = myLook:Dot(diff.Unit)
+                                local angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
+                                if angle <= blockFOV / 2 then
+                                    blockCooldown = tick()
+                                    
+                                    -- Optional: lunge toward shooter (improves block range)
+                                    local dir = diff.Unit
+                                    local bv = hrp:FindFirstChild("BodyVelocity")
+                                    if not bv then
+                                        bv = Instance.new("BodyVelocity")
+                                        bv.MaxForce = Vector3.new(0,0,0)
+                                        bv.Parent = hrp
+                                    end
+                                    bv.MaxForce = Vector3.new(50000,0,50000)
+                                    bv.Velocity = dir * 18
+                                    task.delay(0.15, function()
+                                        if bv then
+                                            TweenService:Create(bv, TweenInfo.new(0.2), {Velocity=Vector3.new(0,0,0), MaxForce=Vector3.new(0,0,0)}):Play()
+                                        end
+                                    end)
+                                    
+                                    -- Send block remote (try both formats; uncomment the one that works)
+                                    pcall(function() Action:FireServer({Type = "Block"}) end)
+                                    -- Alternative: pcall(function() Action:FireServer({Action = "Block"}) end)
+                                    
+                                    break -- only block one shooter per frame
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
 end
-local function disableAutoBlock() if autoBlockConn then autoBlockConn:Disconnect();autoBlockConn=nil end end
 
+local function disableAutoBlock()
+    if autoBlockConn then
+        autoBlockConn:Disconnect()
+        autoBlockConn = nil
+    end
+    -- Reset any lingering BodyVelocity
+    local bv = hrp:FindFirstChild("BodyVelocity")
+    if bv then
+        bv.MaxForce = Vector3.new(0,0,0)
+        bv.Velocity = Vector3.new(0,0,0)
+    end
+end
 local ANIM_SPEED_MULT=1.35
 local function enableAnimSpeedBoost()
     animSpeedConn=RunService.Heartbeat:Connect(function()
@@ -426,14 +779,69 @@ end
 local function disableAnimSpeedBoost() if animSpeedConn then animSpeedConn:Disconnect();animSpeedConn=nil end
     for _,tr in ipairs(animator:GetPlayingAnimationTracks()) do pcall(function() tr:AdjustSpeed(1) end) end end
 
+-- Configurable guard distance (in studs)
+-- Configurable guard distance (studs)
+local GUARD_DISTANCE = 25
+
 local function enableAutoGuard()
-    guardConn=RunService.Heartbeat:Connect(function()
-        if not state.autoGuard then return end; local myPos=hrp.Position; local nearest,nd=nil,math.huge
-        for _,p in ipairs(Players:GetPlayers()) do if p~=player then local c=p.Character; if c and c:FindFirstChild("Ball") then local ph=c:FindFirstChild("HumanoidRootPart"); if ph then local d=(ph.Position-myPos).Magnitude; if d<20 and d<nd then nd=d;nearest=p.Name end end end end end
-        if nearest and character:GetAttribute("Guarding")~=nearest then Action:FireServer(unpack({{Type="Guard",Guarding=nearest}}))
-        elseif not nearest and character:GetAttribute("Guarding")~="" then Action:FireServer(unpack({{Type="Guard",Guarding=""}})) end end)
+    if guardConn then guardConn:Disconnect() end
+    
+    guardConn = RunService.Heartbeat:Connect(function()
+        if not state.autoGuard then return end
+        
+        local myPos = hrp.Position
+        local nearestPlayer = nil
+        local nearestDist = math.huge
+        
+        for _, other in ipairs(Players:GetPlayers()) do
+            if other ~= player then
+                local char = other.Character
+                if char and char.Parent then
+                    -- Detect ball possession
+                    local hasBall = false
+                    if char:FindFirstChild("Ball") then
+                        hasBall = true
+                    elseif char:GetAttribute("HasBall") == true then
+                        hasBall = true
+                    elseif char:GetAttribute("Action") == "Dribbling" then
+                        hasBall = true
+                    end
+                    
+                    if hasBall then
+                        local root = char:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            local dist = (root.Position - myPos).Magnitude
+                            if dist < GUARD_DISTANCE and dist < nearestDist then
+                                nearestDist = dist
+                                nearestPlayer = other.Name
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- Send guard command (try these two formats – uncomment the working one)
+        if nearestPlayer then
+            -- Format 1 (most common)
+            pcall(function() Action:FireServer({Action = "Guard", Guard = true, Guarding = nearestPlayer}) end)
+            -- Format 2 (alternative)
+            -- pcall(function() Action:FireServer({Type = "Guard", Guarding = nearestPlayer}) end)
+        else
+            -- Stop guarding
+            pcall(function() Action:FireServer({Action = "Guard", Guard = false}) end)
+            -- pcall(function() Action:FireServer({Type = "Guard", Guarding = ""}) end)
+        end
+    end)
 end
-local function disableAutoGuard() if guardConn then guardConn:Disconnect();guardConn=nil end pcall(function() Action:FireServer(unpack({{Type="Guard",Guarding=""}})) end) end
+
+local function disableAutoGuard()
+    if guardConn then
+        guardConn:Disconnect()
+        guardConn = nil
+    end
+    pcall(function() Action:FireServer({Action = "Guard", Guard = false}) end)
+end
 
 local ANKLE_ANIMS={"AnkleBreaker01","AnkleBreaker02","AnkleBreaker03","AnkleBreaker05","AnkleBreaker06"}
 local function enableAntiAnkleBreak()
@@ -444,17 +852,36 @@ end
 local function disableAntiAnkleBreak() if ankleConn then ankleConn:Disconnect();ankleConn=nil end end
 
 local function enableAntiStun()
-    antiStunConn=RunService.Heartbeat:Connect(function()
+    if antiStunConn then antiStunConn:Disconnect() end
+    antiStunConn = RunService.Heartbeat:Connect(function()
         if not state.antiStun then return end
         pcall(function()
-            if character:GetAttribute("Stunned") then character:SetAttribute("Stunned",false) end
-            if character:GetAttribute("PushStun") then character:SetAttribute("PushStun",false) end
-            if character:GetAttribute("BlowByStun") then character:SetAttribute("BlowByStun",false) end
-            if character:GetAttribute("SecondPushStun") then character:SetAttribute("SecondPushStun",false) end
-        end) end)
+            -- Clear all stun-related attributes
+            if character:GetAttribute("Stunned") then
+                character:SetAttribute("Stunned", false)
+            end
+            if character:GetAttribute("PushStun") then
+                character:SetAttribute("PushStun", false)
+            end
+            if character:GetAttribute("BlowByStun") then
+                character:SetAttribute("BlowByStun", false)
+            end
+            if character:GetAttribute("SecondPushStun") then
+                character:SetAttribute("SecondPushStun", false)
+            end
+            if character:GetAttribute("Action") == "ScreenStun" then
+                character:SetAttribute("Action", "")
+            end
+        end)
+    end)
 end
-local function disableAntiStun() if antiStunConn then antiStunConn:Disconnect();antiStunConn=nil end end
 
+local function disableAntiStun()
+    if antiStunConn then
+        antiStunConn:Disconnect()
+        antiStunConn = nil
+    end
+end
 local function enableBlowByBoost()
     blowByConn=animator.AnimationPlayed:Connect(function(tr)
         if not state.blowByBoost then return end
@@ -470,16 +897,135 @@ local function enableBlowByBoost()
 end
 local function disableBlowByBoost() if blowByConn then blowByConn:Disconnect();blowByConn=nil end end
 
-local function enableAntiContest()
-    antiContestConn=RunService.Heartbeat:Connect(function()
-        if not state.antiContest then return end; if character:GetAttribute("Action")~="Shooting" then return end
-        local myPos=hrp.Position
-        for _,p in ipairs(Players:GetPlayers()) do if p~=player then local c=p.Character; if c then local ph=c:FindFirstChild("HumanoidRootPart"); if ph then local diff=myPos-ph.Position
-            if diff.Magnitude<6 then local bv=hrp:FindFirstChild("BodyVelocity"); if bv then local a=diff.Unit*12; bv.MaxForce=Vector3.new(50000,0,50000); bv.Velocity=Vector3.new(a.X,0,a.Z) end end end end end end end)
-end
-local function disableAntiContest() if antiContestConn then antiContestConn:Disconnect();antiContestConn=nil end
-    local bv=hrp:FindFirstChild("BodyVelocity"); if bv then bv.MaxForce=Vector3.new(0,0,0); bv.Velocity=Vector3.new(0,0,0) end end
+local originalHitboxSize = nil
+local hitboxPart = nil
+local wasShooting = false
 
+local function findHitbox()
+    for _, obj in ipairs(character:GetDescendants()) do
+        if obj:IsA("BasePart") and (obj.Name:lower() == "hitbox" or obj.Name:lower() == "hitboxpart") then
+            return obj
+        end
+    end
+    return nil
+end
+-- Hip Height Booster: temporarily increases hip height during shooting
+local originalHipHeight = humanoid.HipHeight
+local hipHeightBoostConn = nil
+local wasShootingForHip = false
+
+local function enableHipHeightBoost()
+    if hipHeightBoostConn then hipHeightBoostConn:Disconnect() end
+    hipHeightBoostConn = RunService.Heartbeat:Connect(function()
+        if not state.hipHeightBoost then
+            -- Restore original hip height when feature is off
+            if wasShootingForHip then
+                humanoid.HipHeight = originalHipHeight
+                wasShootingForHip = false
+            end
+            return
+        end
+        
+        local action = character:GetAttribute("Action") or ""
+        local isShooting = (action == "Shooting")
+        
+        if isShooting then
+            -- Apply boost (only if not already boosted)
+            if not wasShootingForHip then
+                humanoid.HipHeight = originalHipHeight + state.hipHeightAmount
+                wasShootingForHip = true
+            end
+        elseif wasShootingForHip then
+            -- Restore after shooting
+            humanoid.HipHeight = originalHipHeight
+            wasShootingForHip = false
+        end
+    end)
+end
+
+local function disableHipHeightBoost()
+    if hipHeightBoostConn then
+        hipHeightBoostConn:Disconnect()
+        hipHeightBoostConn = nil
+    end
+    -- Restore original height
+    if wasShootingForHip then
+        humanoid.HipHeight = originalHipHeight
+        wasShootingForHip = false
+    end
+end
+local function enableAntiContest()
+    if antiContestConn then antiContestConn:Disconnect() end
+    antiContestConn = RunService.Heartbeat:Connect(function()
+        if not state.antiContest then
+            -- If feature is turned off, restore hitbox and exit
+            if wasShooting and hitboxPart and originalHitboxSize then
+                hitboxPart.Size = originalHitboxSize
+                wasShooting = false
+            end
+            return
+        end
+
+        local action = character:GetAttribute("Action") or ""
+        local isShooting = (action == "Shooting")
+
+        -- Find hitbox once
+        if not hitboxPart then
+            hitboxPart = findHitbox()
+            if hitboxPart then
+                originalHitboxSize = hitboxPart.Size
+            end
+        end
+
+        if isShooting then
+            -- Shrink hitbox when shooting (only if not already shrunk)
+            if hitboxPart and hitboxPart.Size ~= Vector3.new(0.1, 0.1, 0.1) then
+                hitboxPart.Size = Vector3.new(0.1, 0.1, 0.1)
+            end
+            wasShooting = true
+
+            -- Optional: push away nearby guards (single impulse, not continuous)
+            local myPos = hrp.Position
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= player then
+                    local c = p.Character
+                    if c then
+                        local ph = c:FindFirstChild("HumanoidRootPart")
+                        if ph then
+                            local diff = myPos - ph.Position
+                            if diff.Magnitude < 6 then
+                                local bv = hrp:FindFirstChild("BodyVelocity")
+                                if bv then
+                                    local a = diff.Unit * 12
+                                    bv.MaxForce = Vector3.new(50000, 0, 50000)
+                                    bv.Velocity = Vector3.new(a.X, 0, a.Z)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        elseif wasShooting then
+            -- Just finished shooting: restore hitbox size
+            if hitboxPart and originalHitboxSize then
+                hitboxPart.Size = originalHitboxSize
+            end
+            wasShooting = false
+        end
+    end)
+end
+
+local function disableAntiContest()
+    if antiContestConn then
+        antiContestConn:Disconnect()
+        antiContestConn = nil
+    end
+    -- Restore hitbox size
+    if hitboxPart and originalHitboxSize then
+        hitboxPart.Size = originalHitboxSize
+    end
+    wasShooting = false
+end
 local FEATURE_ACTIONS={
     autoGreen={nil,nil}, -- handled by ContextAction binding
     infiniteStamina={enableInfiniteStamina,disableInfiniteStamina},
@@ -498,6 +1044,11 @@ local FEATURE_ACTIONS={
     antiStun={enableAntiStun,disableAntiStun},
     blowByBoost={enableBlowByBoost,disableBlowByBoost},
     antiContest={enableAntiContest,disableAntiContest},
+    autoCrossover = {enableAutoCrossover, nil},
+    dribbleSpeedBoost = {enableDribbleSpeedBoost, nil},
+    instantSpin = {enableInstantSpin, nil}, 
+    autoCrossover = {enableAutoCrossover, disableAutoCrossover},
+    hipHeightBoost = {enableHipHeightBoost, disableHipHeightBoost},
 }
 
 -- ====================================================================
@@ -513,14 +1064,21 @@ SG.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
 SG.IgnoreGuiInset=true; SG.DisplayOrder=10
 SG.Parent=player:WaitForChild("PlayerGui")
 
--- Dimensions — compact square-ish
-local PW = isMobile and 272 or 280   -- panel width
-local PH = isMobile and 430 or 440   -- panel height
+-- Center the UI initially
+local PW = isMobile and 272 or 280
+local PH = isMobile and 430 or 440
 
-local container=Instance.new("Frame",SG)
-container.Size=UDim2.new(0,PW,0,PH)
-container.Position=isMobile and UDim2.new(0,4,0,4) or UDim2.new(0,10,0.5,-PH/2)
-container.BackgroundTransparency=1
+local container = Instance.new("Frame", SG)
+container.Size = UDim2.new(0, PW, 0, PH)
+-- Default centered position
+container.Position = UDim2.new(0.5, -PW/2, 0.5, -PH/2)
+container.BackgroundTransparency = 1
+
+-- Load saved position
+local savedPos = loadSettings()
+if savedPos then
+    container.Position = UDim2.new(0.5, savedPos.X, 0.5, savedPos.Y)
+end
 
 local main=Instance.new("Frame",container)
 main.Size=UDim2.new(1,0,1,0)
@@ -568,18 +1126,29 @@ minBtn.BackgroundColor3=C.TOGGLE_OFF; minBtn.BorderSizePixel=0
 minBtn.Text="−"; minBtn.TextColor3=C.TEXT_MID; minBtn.Font=Enum.Font.GothamBold; minBtn.TextSize=14; minBtn.ZIndex=10
 Instance.new("UICorner",minBtn).CornerRadius=UDim.new(0,5)
 
--- drag
-local dragging,dragStart,dStartPos=false,nil,nil
+-- Drag to move UI (simple & reliable)
+local dragging, dragStart, dStartPos = false, nil, nil
 header.InputBegan:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
-        dragging=true; dragStart=Vector2.new(i.Position.X,i.Position.Y); dStartPos=container.Position end end)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = Vector2.new(i.Position.X, i.Position.Y)
+        dStartPos = container.Position
+    end
+end)
 header.InputEnded:Connect(function(i)
-    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then dragging=false end end)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+        saveSettings()  -- save new position
+    end
+end)
 UserInputService.InputChanged:Connect(function(i)
     if not dragging then return end
-    if i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch then
-        local dx=i.Position.X-dragStart.X; local dy=i.Position.Y-dragStart.Y
-        container.Position=UDim2.new(dStartPos.X.Scale,dStartPos.X.Offset+dx,dStartPos.Y.Scale,dStartPos.Y.Offset+dy) end end)
+    if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
+        local dx = i.Position.X - dragStart.X
+        local dy = i.Position.Y - dragStart.Y
+        container.Position = UDim2.new(dStartPos.X.Scale, dStartPos.X.Offset + dx, dStartPos.Y.Scale, dStartPos.Y.Offset + dy)
+    end
+end)
 
 -- ── TAB BAR (32px, 4 tabs) ───────────────────────────────────────────
 local TAB_Y = HDR_H+2
@@ -690,6 +1259,7 @@ local function mkToggle(tabName, key, label, desc)
         TweenService:Create(stripe,TweenInfo.new(0.14),{BackgroundTransparency=on and 0 or 1}):Play()
         statLbl.Text=on and "ON" or "OFF"; statLbl.TextColor3=on and C.ACCENT or C.TEXT_DIM
         local fa=FEATURE_ACTIONS[key]; if fa then if on then if fa[1] then fa[1]() end else if fa[2] then fa[2]() end end end
+        saveSettings()  
     end)
     return ref
 end
@@ -824,6 +1394,13 @@ mkHueSlider("MOVE")
 mkToggle("DRIB","dribbleMacro",  "Dribble Macro", "Auto crossover/hesit/combo")
 mkToggle("DRIB","antiAnkleBreak","Anti Ankle Brk","Cancel ankle break anims")
 mkToggle("DRIB","animSpeedBoost","Anim Speed+",   "1.35× animation speed")
+mkToggle("DRIB", "autoCrossover", "Auto Crossover", "Crossover on sprint")
+mkToggle("DRIB", "dribbleSpeedBoost", "Dribble Speed+", "Override dribble speed")
+mkToggle("DRIB", "instantSpin", "Instant Spin", "Spin on Q key")
+mkToggle("DRIB", "hipHeightBoost", "Hip Height Boost", "Subtle rise while shooting to avoid blocks")
+mkSlider("DRIB", "Boost Amount", 1.0, 3.0, state.hipHeightAmount, function(v)
+    state.hipHeightAmount = v
+end)
 
 -- DEFENSE
 mkToggle("DEFENSE","autoGuard",  "Auto Guard",    "Face nearest ball carrier")
@@ -831,6 +1408,7 @@ mkToggle("DEFENSE","autoBlock",  "Auto Block",    "Block nearby shooters")
 mkSlider("DEFENSE","Block Range",4,25,blockRange,  function(v) blockRange=v end)
 mkSlider("DEFENSE","Block FOV",  20,180,blockFOV,  function(v) blockFOV=v  end)
 mkSlider("DEFENSE","Block Delay",0,500,blockDelayMs,function(v) blockDelayMs=v end)
+mkSlider("DEFENSE", "Guard Range", 10, 50, GUARD_DISTANCE, function(v) GUARD_DISTANCE= v end)
 mkToggle("DEFENSE","antiStun",   "Anti Stun",     "Clear stun/push attrs")
 mkToggle("DEFENSE","antiOOB",    "Anti OOB",      "Never go out of bounds")
 

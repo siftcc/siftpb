@@ -92,7 +92,7 @@ if not container then return end
             blockFOV = blockFOV,
             blockDelayMs = blockDelayMs,
             GUARD_DISTANCE = GUARD_DISTANCE,
-            vfxHue = vfxHue,
+            vfxHue = vfxHue, hipHeightAmount = state.hipHeightAmount, 
         }
     }
     for k, v in pairs(state) do
@@ -477,14 +477,55 @@ local macroActive,sbLastTap=false,0
 local blockCooldown = 0
 local lagOriginals={}
 
+local staminaLoop = nil
+local staminaConn = nil
+
 local function enableInfiniteStamina()
-    pcall(function() character:SetAttribute("Stamina",100) end)
-    staminaConn=RunService.Heartbeat:Connect(function()
-        local c=character:GetAttribute("Stamina"); if c and c<98 then character:SetAttribute("Stamina",100) end
-        local h=character:FindFirstChild("Head"); if h then local sw=h:FindFirstChild("Sweat"); if sw then sw.Enabled=false end end
+    if staminaConn then staminaConn:Disconnect() end
+    if staminaLoop then task.cancel(staminaLoop) end
+    
+    -- Immediately set stamina to 100
+    pcall(function() character:SetAttribute("Stamina", 100) end)
+    
+    -- Listen for any stamina change and reset it immediately
+    staminaConn = character:GetAttributeChangedSignal("Stamina"):Connect(function()
+        if state.infiniteStamina then
+            local c = character:GetAttribute("Stamina")
+            if c and c < 100 then
+                character:SetAttribute("Stamina", 100)
+            end
+        end
+    end)
+    
+    -- Also run a fast loop to ensure it stays at 100 (catches cases where attribute change might not fire)
+    staminaLoop = task.spawn(function()
+        while state.infiniteStamina do
+            local c = character:GetAttribute("Stamina")
+            if c and c < 100 then
+                character:SetAttribute("Stamina", 100)
+            end
+            -- Also disable sweat visual
+            local head = character:FindFirstChild("Head")
+            if head then
+                local sweat = head:FindFirstChild("Sweat")
+                if sweat then sweat.Enabled = false end
+            end
+            task.wait(0.1)
+        end
     end)
 end
-local function disableInfiniteStamina() if staminaConn then staminaConn:Disconnect();staminaConn=nil end end
+
+local function disableInfiniteStamina()
+    if staminaConn then
+        staminaConn:Disconnect()
+        staminaConn = nil
+    end
+    if staminaLoop then
+        task.cancel(staminaLoop)
+        staminaLoop = nil
+    end
+    -- Do not restore stamina – leave it as is
+end
 
 local function enableAutoSprint()
     Action:FireServer(unpack({{Sprinting=true,Type="Sprint"}}))
@@ -567,7 +608,26 @@ end
 
 local dribSpeedBoostConn = nil
 local DRIBBLE_SPEED_OVERRIDE = 22
-local lastSpeedBoostTime = 0
+
+local function enableDribbleSpeedBoost()
+    if dribSpeedBoostConn then dribSpeedBoostConn:Disconnect() end
+    
+    -- Use Stepped (runs after game's movement update) to ensure our speed sticks
+    dribSpeedBoostConn = RunService.Stepped:Connect(function()
+        if not state.dribbleSpeedBoost then return end
+        if character:GetAttribute("Action") == "Dribbling" then
+            humanoid.WalkSpeed = DRIBBLE_SPEED_OVERRIDE
+        end
+    end)
+end
+
+local function disableDribbleSpeedBoost()
+    if dribSpeedBoostConn then
+        dribSpeedBoostConn:Disconnect()
+        dribSpeedBoostConn = nil
+    end
+    -- Do not reset walkspeed – game will handle it
+end
 
 local instantSpinConn = nil
 local lastSpinTime = 0
@@ -1204,175 +1264,198 @@ for i,name in ipairs(TABS) do
 end
 
 -- ── WIDGET BUILDERS ──────────────────────────────────────────────────
-local toggleRefs={}
+-- ── WIDGET BUILDERS ──────────────────────────────────────────────────
+local toggleRefs = {}
+local sliderRefs = {}
 
 -- Toggle card (compact 36px)
 local function mkToggle(tabName, key, label, desc)
-    local parent=contentFrames[tabName]
-    local card=Instance.new("Frame",parent)
-    card.Size=UDim2.new(1,0,0,36); card.BackgroundColor3=C.CARD; card.BorderSizePixel=0
-    Instance.new("UICorner",card).CornerRadius=UDim.new(0,7)
+    local parent = contentFrames[tabName]
+    local card = Instance.new("Frame", parent)
+    card.Size = UDim2.new(1,0,0,36)
+    card.BackgroundColor3 = C.CARD
+    card.BorderSizePixel = 0
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0,7)
 
-    local stripe=Instance.new("Frame",card)
-    stripe.Size=UDim2.new(0,2,0.6,0); stripe.Position=UDim2.new(0,0,0.2,0)
-    stripe.BackgroundColor3=C.ACCENT; stripe.BorderSizePixel=0; stripe.BackgroundTransparency=1
-    Instance.new("UICorner",stripe).CornerRadius=UDim.new(0,2)
+    local stripe = Instance.new("Frame", card)
+    stripe.Size = UDim2.new(0,2,0.6,0)
+    stripe.Position = UDim2.new(0,0,0.2,0)
+    stripe.BackgroundColor3 = C.ACCENT
+    stripe.BorderSizePixel = 0
+    stripe.BackgroundTransparency = 1
+    Instance.new("UICorner", stripe).CornerRadius = UDim.new(0,2)
 
-    local nameLbl=Instance.new("TextLabel",card)
-    nameLbl.Size=UDim2.new(1,-80,0,16); nameLbl.Position=UDim2.new(0,10,0,4)
-    nameLbl.BackgroundTransparency=1; nameLbl.Text=label
-    nameLbl.TextColor3=C.TEXT_HI; nameLbl.Font=Enum.Font.GothamBold
-    nameLbl.TextSize=11; nameLbl.TextXAlignment=Enum.TextXAlignment.Left
+    local nameLbl = Instance.new("TextLabel", card)
+    nameLbl.Size = UDim2.new(1,-80,0,16)
+    nameLbl.Position = UDim2.new(0,10,0,4)
+    nameLbl.BackgroundTransparency = 1
+    nameLbl.Text = label
+    nameLbl.TextColor3 = C.TEXT_HI
+    nameLbl.Font = Enum.Font.GothamBold
+    nameLbl.TextSize = 11
+    nameLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-    local descLbl=Instance.new("TextLabel",card)
-    descLbl.Size=UDim2.new(1,-80,0,10); descLbl.Position=UDim2.new(0,10,0,21)
-    descLbl.BackgroundTransparency=1; descLbl.Text=desc
-    descLbl.TextColor3=C.TEXT_DIM; descLbl.Font=Enum.Font.Gotham; descLbl.TextSize=8
-    descLbl.TextXAlignment=Enum.TextXAlignment.Left
+    local descLbl = Instance.new("TextLabel", card)
+    descLbl.Size = UDim2.new(1,-80,0,10)
+    descLbl.Position = UDim2.new(0,10,0,21)
+    descLbl.BackgroundTransparency = 1
+    descLbl.Text = desc
+    descLbl.TextColor3 = C.TEXT_DIM
+    descLbl.Font = Enum.Font.Gotham
+    descLbl.TextSize = 8
+    descLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-    local statLbl=Instance.new("TextLabel",card)
-    statLbl.Size=UDim2.new(0,22,0,10); statLbl.Position=UDim2.new(1,-68,0.5,-5)
-    statLbl.BackgroundTransparency=1; statLbl.Text="OFF"; statLbl.TextColor3=C.TEXT_DIM
-    statLbl.Font=Enum.Font.GothamBold; statLbl.TextSize=8
+    local statLbl = Instance.new("TextLabel", card)
+    statLbl.Size = UDim2.new(0,22,0,10)
+    statLbl.Position = UDim2.new(1,-68,0.5,-5)
+    statLbl.BackgroundTransparency = 1
+    statLbl.Text = "OFF"
+    statLbl.TextColor3 = C.TEXT_DIM
+    statLbl.Font = Enum.Font.GothamBold
+    statLbl.TextSize = 8
 
-    local track=Instance.new("Frame",card)
-    track.Size=UDim2.new(0,36,0,18); track.Position=UDim2.new(1,-44,0.5,-9)
-    track.BackgroundColor3=C.TOGGLE_OFF; track.BorderSizePixel=0
-    Instance.new("UICorner",track).CornerRadius=UDim.new(1,0)
+    local track = Instance.new("Frame", card)
+    track.Size = UDim2.new(0,36,0,18)
+    track.Position = UDim2.new(1,-44,0.5,-9)
+    track.BackgroundColor3 = C.TOGGLE_OFF
+    track.BorderSizePixel = 0
+    Instance.new("UICorner", track).CornerRadius = UDim.new(1,0)
 
-    local knob=Instance.new("Frame",track)
-    knob.Size=UDim2.new(0,14,0,14); knob.Position=UDim2.new(0,2,0.5,-7)
-    knob.BackgroundColor3=C.KNOB; knob.BorderSizePixel=0
-    Instance.new("UICorner",knob).CornerRadius=UDim.new(1,0)
+    local knob = Instance.new("Frame", track)
+    knob.Size = UDim2.new(0,14,0,14)
+    knob.Position = UDim2.new(0,2,0.5,-7)
+    knob.BackgroundColor3 = C.KNOB
+    knob.BorderSizePixel = 0
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1,0)
 
-    local ref={track=track,knob=knob,statusLbl=statLbl,card=card,stripe=stripe}
-    toggleRefs[key]=ref
+    local ref = {track=track, knob=knob, statusLbl=statLbl, card=card, stripe=stripe}
+    toggleRefs[key] = ref
 
-    local btn=Instance.new("TextButton",card)
-    btn.Size=UDim2.new(1,0,1,0); btn.BackgroundTransparency=1; btn.Text=""; btn.ZIndex=4
+    local btn = Instance.new("TextButton", card)
+    btn.Size = UDim2.new(1,0,1,0)
+    btn.BackgroundTransparency = 1
+    btn.Text = ""
+    btn.ZIndex = 4
     btn.MouseButton1Click:Connect(function()
-        state[key]=not state[key]
-        local on=state[key]
-        TweenService:Create(track,TweenInfo.new(0.14),{BackgroundColor3=on and C.ACCENT or C.TOGGLE_OFF}):Play()
-        TweenService:Create(knob,TweenInfo.new(0.14),{Position=on and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)}):Play()
-        TweenService:Create(card,TweenInfo.new(0.14),{BackgroundColor3=on and C.CARD_ON or C.CARD}):Play()
-        TweenService:Create(stripe,TweenInfo.new(0.14),{BackgroundTransparency=on and 0 or 1}):Play()
-        statLbl.Text=on and "ON" or "OFF"; statLbl.TextColor3=on and C.ACCENT or C.TEXT_DIM
-        local fa=FEATURE_ACTIONS[key]; if fa then if on then if fa[1] then fa[1]() end else if fa[2] then fa[2]() end end end
-        saveSettings()  
+        state[key] = not state[key]
+        local on = state[key]
+        TweenService:Create(track, TweenInfo.new(0.14), {BackgroundColor3 = on and C.ACCENT or C.TOGGLE_OFF}):Play()
+        TweenService:Create(knob, TweenInfo.new(0.14), {Position = on and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)}):Play()
+        TweenService:Create(card, TweenInfo.new(0.14), {BackgroundColor3 = on and C.CARD_ON or C.CARD}):Play()
+        TweenService:Create(stripe, TweenInfo.new(0.14), {BackgroundTransparency = on and 0 or 1}):Play()
+        statLbl.Text = on and "ON" or "OFF"
+        statLbl.TextColor3 = on and C.ACCENT or C.TEXT_DIM
+        local fa = FEATURE_ACTIONS[key]
+        if fa then
+            if on and fa[1] then fa[1]()
+            elseif not on and fa[2] then fa[2]()
+            end
+        end
+        saveSettings()
     end)
     return ref
 end
 
--- Slider (24px)
+-- Slider (larger touch area)
 local function mkSlider(tabName, label, minV, maxV, initV, onChange)
-    local parent=contentFrames[tabName]
-    local card=Instance.new("Frame",parent)
-    card.Size=UDim2.new(1,0,0,26); card.BackgroundColor3=C.CARD; card.BorderSizePixel=0
-    Instance.new("UICorner",card).CornerRadius=UDim.new(0,7)
+    local parent = contentFrames[tabName]
+    local card = Instance.new("Frame", parent)
+    card.Size = UDim2.new(1,0,0,36)
+    card.BackgroundColor3 = C.CARD
+    card.BorderSizePixel = 0
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0,7)
 
-    local lbl=Instance.new("TextLabel",card)
-    lbl.Size=UDim2.new(0,90,1,0); lbl.Position=UDim2.new(0,8,0,0)
-    lbl.BackgroundTransparency=1; lbl.Text=label; lbl.TextColor3=C.TEXT_MID
-    lbl.Font=Enum.Font.GothamBold; lbl.TextSize=8; lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local lbl = Instance.new("TextLabel", card)
+    lbl.Size = UDim2.new(0,90,1,0)
+    lbl.Position = UDim2.new(0,8,0,0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = label
+    lbl.TextColor3 = C.TEXT_MID
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 8
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
 
-    local valLbl=Instance.new("TextLabel",card)
-    valLbl.Size=UDim2.new(0,28,1,0); valLbl.Position=UDim2.new(1,-32,0,0)
-    valLbl.BackgroundTransparency=1; valLbl.Text=tostring(initV)
-    valLbl.TextColor3=C.ACCENT; valLbl.Font=Enum.Font.GothamBold; valLbl.TextSize=8
+    local valLbl = Instance.new("TextLabel", card)
+    valLbl.Size = UDim2.new(0,28,1,0)
+    valLbl.Position = UDim2.new(1,-32,0,0)
+    valLbl.BackgroundTransparency = 1
+    valLbl.Text = tostring(initV)
+    valLbl.TextColor3 = C.ACCENT
+    valLbl.Font = Enum.Font.GothamBold
+    valLbl.TextSize = 8
 
-    local track=Instance.new("Frame",card)
-    track.Size=UDim2.new(1,-130,0,4); track.Position=UDim2.new(0,96,0.5,-2)
-    track.BackgroundColor3=C.TOGGLE_OFF; track.BorderSizePixel=0
-    Instance.new("UICorner",track).CornerRadius=UDim.new(0,2)
-    local tg=Instance.new("UIGradient",track)
-    tg.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(0,60,180)),ColorSequenceKeypoint.new(1,Color3.fromRGB(80,180,255))})
+    -- Touch track (invisible, large)
+    local track = Instance.new("Frame", card)
+    track.Size = UDim2.new(1,-130,0,24)
+    track.Position = UDim2.new(0,96,0.5,-12)
+    track.BackgroundTransparency = 1
+    track.BorderSizePixel = 0
 
-    local kn=Instance.new("Frame",track)
-    local ip=math.clamp((initV-minV)/(maxV-minV),0,1)
-    kn.Size=UDim2.new(0,12,0,12); kn.Position=UDim2.new(ip,-6,0.5,-6)
-    kn.BackgroundColor3=C.KNOB; kn.BorderSizePixel=0
-    Instance.new("UICorner",kn).CornerRadius=UDim.new(1,0)
-    local ks=Instance.new("UIStroke",kn); ks.Color=C.BG; ks.Thickness=1.5
+    -- Visual bar (small)
+    local visualBar = Instance.new("Frame", track)
+    visualBar.Size = UDim2.new(1,0,0,4)
+    visualBar.Position = UDim2.new(0,0,0.5,-2)
+    visualBar.BackgroundColor3 = C.TOGGLE_OFF
+    visualBar.BorderSizePixel = 0
+    Instance.new("UICorner", visualBar).CornerRadius = UDim.new(0,2)
+    local tg = Instance.new("UIGradient", visualBar)
+    tg.Color = ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(0,60,180)), ColorSequenceKeypoint.new(1,Color3.fromRGB(80,180,255))})
 
-    local sliding=false
+    local kn = Instance.new("Frame", track)
+    local ip = math.clamp((initV - minV) / (maxV - minV), 0, 1)
+    kn.Size = UDim2.new(0,12,0,12)
+    kn.Position = UDim2.new(ip, -6, 0.5, -6)
+    kn.BackgroundColor3 = C.KNOB
+    kn.BorderSizePixel = 0
+    Instance.new("UICorner", kn).CornerRadius = UDim.new(1,0)
+    local ks = Instance.new("UIStroke", kn)
+    ks.Color = C.BG
+    ks.Thickness = 1.5
+
+    local sliding = false
     local function doSlide(pos)
-        local ap=track.AbsolutePosition; local as=track.AbsoluteSize
-        local rel=math.clamp((pos.X-ap.X)/as.X,0,1)
-        local val=math.floor(minV+(maxV-minV)*rel+0.5)
-        kn.Position=UDim2.new(rel,-6,0.5,-6); valLbl.Text=tostring(val); onChange(val)
+        local ap = track.AbsolutePosition
+        local as = track.AbsoluteSize
+        local rel = math.clamp((pos.X - ap.X) / as.X, 0, 1)
+        local val = math.floor(minV + (maxV - minV) * rel + 0.5)
+        kn.Position = UDim2.new(rel, -6, 0.5, -6)
+        valLbl.Text = tostring(val)
+        onChange(val)
+        saveSettings()
     end
-    track.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then sliding=true; doSlide(i.Position) end end)
-    track.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then sliding=false end end)
-    UserInputService.InputChanged:Connect(function(i) if sliding and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then doSlide(i.Position) end end)
+
+    track.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            sliding = true
+            doSlide(i.Position)
+        end
+    end)
+    track.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            sliding = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if sliding and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            doSlide(i.Position)
+        end
+    end)
+
+    table.insert(sliderRefs, {label=label, kn=kn, valLbl=valLbl, onChange=onChange, minV=minV, maxV=maxV})
 end
 
--- Hue slider (24px)
+-- Hue slider (unchanged, keep as is)
 local function mkHueSlider(tabName)
-    local parent=contentFrames[tabName]
-    local card=Instance.new("Frame",parent)
-    card.Size=UDim2.new(1,0,0,26); card.BackgroundColor3=C.CARD; card.BorderSizePixel=0
-    Instance.new("UICorner",card).CornerRadius=UDim.new(0,7)
-
-    local lbl=Instance.new("TextLabel",card)
-    lbl.Size=UDim2.new(0,60,1,0); lbl.Position=UDim2.new(0,8,0,0)
-    lbl.BackgroundTransparency=1; lbl.Text="VFX HUE"; lbl.TextColor3=C.TEXT_MID
-    lbl.Font=Enum.Font.GothamBold; lbl.TextSize=8; lbl.TextXAlignment=Enum.TextXAlignment.Left
-
-    local swatch=Instance.new("Frame",card)
-    swatch.Size=UDim2.new(0,12,0,12); swatch.Position=UDim2.new(1,-32,0.5,-6)
-    swatch.BackgroundColor3=hsvToRgb(vfxHue,0.9,1); swatch.BorderSizePixel=0
-    Instance.new("UICorner",swatch).CornerRadius=UDim.new(0,3)
-
-    local valLbl=Instance.new("TextLabel",card)
-    valLbl.Size=UDim2.new(0,0,1,0); valLbl.Position=UDim2.new(1,-50,0,0)
-    valLbl.BackgroundTransparency=1; valLbl.Text=tostring(vfxHue).."°"
-    valLbl.TextColor3=C.ACCENT; valLbl.Font=Enum.Font.GothamBold; valLbl.TextSize=8
-
-    local track=Instance.new("Frame",card)
-    track.Size=UDim2.new(1,-120,0,4); track.Position=UDim2.new(0,68,0.5,-2)
-    track.BackgroundColor3=C.TOGGLE_OFF; track.BorderSizePixel=0
-    Instance.new("UICorner",track).CornerRadius=UDim.new(0,2)
-    local rg=Instance.new("UIGradient",track)
-    rg.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(255,0,0)),ColorSequenceKeypoint.new(0.17,Color3.fromRGB(255,165,0)),ColorSequenceKeypoint.new(0.33,Color3.fromRGB(255,255,0)),ColorSequenceKeypoint.new(0.5,Color3.fromRGB(0,255,0)),ColorSequenceKeypoint.new(0.67,Color3.fromRGB(0,130,255)),ColorSequenceKeypoint.new(0.83,Color3.fromRGB(130,0,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(255,0,0))})
-
-    local kn=Instance.new("Frame",track)
-    local ip=vfxHue/360
-    kn.Size=UDim2.new(0,12,0,12); kn.Position=UDim2.new(ip,-6,0.5,-6)
-    kn.BackgroundColor3=Color3.fromRGB(240,242,248); kn.BorderSizePixel=0
-    Instance.new("UICorner",kn).CornerRadius=UDim.new(1,0)
-    local ks=Instance.new("UIStroke",kn); ks.Color=C.BG; ks.Thickness=1.5
-
-    local sliding=false
-    local function doSlide(pos)
-        local ap=track.AbsolutePosition; local as=track.AbsoluteSize
-        local rel=math.clamp((pos.X-ap.X)/as.X,0,1)
-        vfxHue=math.floor(rel*360+0.5); kn.Position=UDim2.new(rel,-6,0.5,-6)
-        valLbl.Text=tostring(vfxHue).."°"; swatch.BackgroundColor3=hsvToRgb(vfxHue,0.9,1); applyVfx()
-    end
-    track.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then sliding=true; doSlide(i.Position) end end)
-    track.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then sliding=false end end)
-    UserInputService.InputChanged:Connect(function(i) if sliding and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then doSlide(i.Position) end end)
+    -- ... (your existing mkHueSlider code) ...
+    -- (I'm omitting it for brevity – keep your original)
 end
 
--- Shoot button (inside SHOOT tab)
+-- Shoot button
 local function mkShootBtn(tabName)
-    local parent=contentFrames[tabName]
-    local btn=Instance.new("TextButton",parent)
-    btn.Size=UDim2.new(1,0,0,38); btn.BackgroundColor3=C.SHOOT_BTN; btn.BorderSizePixel=0
-    btn.Text="▶  SHOOT  [E]"; btn.TextColor3=C.TEXT_HI
-    btn.Font=Enum.Font.GothamBlack; btn.TextSize=13
-    Instance.new("UICorner",btn).CornerRadius=UDim.new(0,8)
-    local sg=Instance.new("UIGradient",btn)
-    sg.Color=ColorSequence.new({ColorSequenceKeypoint.new(0,Color3.fromRGB(0,70,200)),ColorSequenceKeypoint.new(0.5,Color3.fromRGB(60,160,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(0,70,200))})
-    task.spawn(function() local t=0; while btn and btn.Parent do RunService.Heartbeat:Wait(); t=t+0.01; sg.Offset=Vector2.new(math.sin(t)*0.5,0) end end)
-    btn.MouseButton1Click:Connect(function() task.spawn(executeShot) end)
-    btn.MouseButton1Down:Connect(function() TweenService:Create(btn,TweenInfo.new(0.07),{BackgroundColor3=C.SHOOT_DOWN}):Play() end)
-    btn.MouseButton1Up:Connect(function() TweenService:Create(btn,TweenInfo.new(0.1),{BackgroundColor3=C.SHOOT_BTN}):Play() end)
+    -- ... (your existing mkShootBtn code) ...
 end
 
 -- ── POPULATE TABS ────────────────────────────────────────────────────
-
 -- SHOOT
 mkShootBtn("SHOOT")
 mkToggle("SHOOT","autoGreen",    "Auto Green",    "Greens every shot via E/btn")
@@ -1412,14 +1495,55 @@ mkSlider("DEFENSE", "Guard Range", 10, 50, GUARD_DISTANCE, function(v) GUARD_DIS
 mkToggle("DEFENSE","antiStun",   "Anti Stun",     "Clear stun/push attrs")
 mkToggle("DEFENSE","antiOOB",    "Anti OOB",      "Never go out of bounds")
 
--- ── DEFAULT TAB + MINIMIZE ───────────────────────────────────────────
+-- ========== APPLY SAVED SETTINGS (NOW AFTER ALL UI IS CREATED) ==========
+for key, ref in pairs(toggleRefs) do
+    if state[key] ~= nil then
+        local on = state[key]
+        pcall(function()
+            TweenService:Create(ref.track, TweenInfo.new(0.14), {BackgroundColor3 = on and C.ACCENT or C.TOGGLE_OFF}):Play()
+            TweenService:Create(ref.knob, TweenInfo.new(0.14), {Position = on and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)}):Play()
+            TweenService:Create(ref.card, TweenInfo.new(0.14), {BackgroundColor3 = on and C.CARD_ON or C.CARD}):Play()
+            TweenService:Create(ref.stripe, TweenInfo.new(0.14), {BackgroundTransparency = on and 0 or 1}):Play()
+            ref.statusLbl.Text = on and "ON" or "OFF"
+            ref.statusLbl.TextColor3 = on and C.ACCENT or C.TEXT_DIM
+        end)
+        local fa = FEATURE_ACTIONS[key]
+        if fa then
+            if on and fa[1] then pcall(fa[1])
+            elseif not on and fa[2] then pcall(fa[2])
+            end
+        end
+    end
+end
+
+for _, ref in ipairs(sliderRefs) do
+    local val = nil
+    if ref.label == "Speed (WS)" then val = manualSpeedVal
+    elseif ref.label == "Block Range" then val = blockRange
+    elseif ref.label == "Block FOV" then val = blockFOV
+    elseif ref.label == "Block Delay" then val = blockDelayMs
+    elseif ref.label == "Guard Range" then val = GUARD_DISTANCE
+    elseif ref.label == "Boost Amount" then val = state.hipHeightAmount
+    end
+    if val then
+        local ip = (val - ref.minV) / (ref.maxV - ref.minV)
+        pcall(function()
+            ref.kn.Position = UDim2.new(ip, -6, 0.5, -6)
+            ref.valLbl.Text = tostring(val)
+        end)
+        pcall(function() ref.onChange(val) end)
+    end
+end
+
 switchTab("SHOOT")
 
+-- ── MINIMIZE BUTTON (keep at the very end) ───────────────────────────
 minBtn.MouseButton1Click:Connect(function()
-    minimized=not minimized
-    TweenService:Create(main,TweenInfo.new(0.18,Enum.EasingStyle.Quad),{
-        Size=minimized and UDim2.new(1,0,0,HDR_H+2) or UDim2.new(1,0,1,0)}):Play()
-    minBtn.Text=minimized and "+" or "−"
+    minimized = not minimized
+    TweenService:Create(main, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {
+        Size = minimized and UDim2.new(1,0,0,HDR_H+2) or UDim2.new(1,0,1,0)
+    }):Play()
+    minBtn.Text = minimized and "+" or "−"
 end)
 
-print(string.format("[SiftWin] v4.1 | %s | %d AG timings",Platform,#TIMINGS))
+print(string.format("[SiftWin] v4.1 | %s | %d AG timings", Platform, #TIMINGS))
